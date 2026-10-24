@@ -25,6 +25,10 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+          cache: gradle
+          cache-dependency-path: |
+            android/**/*.gradle*
+            android/gradle/wrapper/gradle-wrapper.properties
       - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
         with:
           flutter-version: '3.32.1'
@@ -45,6 +49,8 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
       - name: Build signed APK
         run: flutter build apk --release --no-pub --dart-define-from-file=.release/login.json
+      - name: Verify APK upgrade compatibility
+        run: python3 scripts/check_apk.py
       - name: Publish APK and update downloads
         run: python3 scripts/publish_release.py
         env:

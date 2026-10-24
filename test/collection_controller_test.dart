@@ -9,6 +9,61 @@ LighterSeries series(String id, int number) =>
     LighterSeries(id: id, name: 'İstanbul Serisi', seriesNumber: number);
 
 void main() {
+  test(
+    'Dış istemcinin aynı anahtarla seri numarası değiştirmesi görünür uyarı verir',
+    () async {
+      final repository = FakeCollectionRepository([series('series-1', 22)]);
+      addTearDown(repository.close);
+      final controller = LighterCollectionController(repo: repository);
+      addTearDown(controller.dispose);
+      await flush();
+      expect(controller.dataWarning, isNull);
+      repository.records['series-1'] = series('series-1', 62);
+      repository.publish();
+      await flush();
+      expect(controller.dataWarning, contains('Eski APK'));
+      expect(controller.series.single.seriesNumber, 62);
+    },
+  );
+
+  test(
+    '40 eski kayıttan sonra 120 ekleme ve yeniden açılış hiçbir kaydı ezmez',
+    () async {
+      final originals = List.generate(
+        40,
+        (i) => series('series-${i + 1}', i + 22),
+      );
+      final repository = FakeCollectionRepository(originals);
+      addTearDown(repository.close);
+      for (var session = 0; session < 3; session++) {
+        final controller = LighterCollectionController(repo: repository);
+        await flush();
+        for (var i = 0; i < 40; i++) {
+          expect(
+            await controller.upsertSeries(name: 'Yeni $session-$i'),
+            isTrue,
+          );
+        }
+        await flush();
+        expect(controller.totalSeries, 40 + (session + 1) * 40);
+        controller.dispose();
+      }
+      for (final original in originals) {
+        expect(repository.records[original.id], same(original));
+      }
+      expect(
+        repository.records.values.map((s) => s.seriesNumber).toSet().length,
+        160,
+      );
+      expect(
+        repository.records.values
+            .map((s) => s.seriesNumber)
+            .reduce((a, b) => a > b ? a : b),
+        181,
+      );
+    },
+  );
+
   test('Yeniden açılışta ekleme eski series-1 kaydını korur', () async {
     final repository = FakeCollectionRepository([series('series-1', 1)]);
     addTearDown(repository.close);

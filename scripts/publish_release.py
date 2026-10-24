@@ -112,9 +112,16 @@ def publish():
     checksums = artifacts / 'SHA256SUMS'
     checksums.write_text(f'{digest}  Clipper.apk\n')
     notes = artifacts / 'notes.md'
-    notes.write_text(f'iClip {release_version}\n\nAndroid release APK. Kurulumdan sonra uygulama giriş bilgilerini kullanın.\n\n'
-                     'Veri bütünlüğü, kamera ve liste performansı iyileştirmelerini içerir. '
-                     'Uygulama kilidi yereldir; Firebase sunucu kuralları bu yayın tarafından değiştirilmez.\n\n'
+    changelog = ROOT / 'CHANGELOG.md'
+    section = ''
+    if changelog.exists():
+        heading = '## ' + release_version + ' '
+        for part in changelog.read_text().split('\n## '):
+            if ('## ' + part).startswith(heading):
+                section = part.split('\n', 1)[1].strip()
+                break
+    notes.write_text(f'iClip {release_version}\n\n' + section +
+                     '\n\nMevcut uygulamayı kaldırmadan APK’yı üzerine kurun.\n\n' +
                      f'SHA-256: `{digest}`\n')
     existing = next((r for r in all_releases() if r['tag_name'] == tag), None)
     if existing and not existing['draft']:

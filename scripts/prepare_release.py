@@ -2,6 +2,7 @@
 import base64
 import json
 import os
+import re
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -38,6 +39,8 @@ def prepare(env):
         raise ValueError('Invalid login work factor')
     release = ROOT / '.release'
     private_write(ROOT / 'android/app/google-services.json', json.dumps(firebase).encode())
+    version = re.search(r'^version:\s*(\S+)', (ROOT / 'pubspec.yaml').read_text(), re.M).group(1)
+    login['APP_VERSION'] = version
     private_write(release / 'login.json', json.dumps(login).encode())
     private_write(release / 'iclip-release.p12', base64.b64decode(env['ANDROID_KEYSTORE_BASE64'], validate=True))
     values = {

@@ -1,12 +1,12 @@
-import 'dart:async';
-import 'dart:io';
 import 'dart:math';
 
-import 'package:camera/camera.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
-import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'models/lighter_series.dart';
+import 'services/ocr.dart';
+export 'services/ocr.dart' show ScanResult;
+import 'widgets/scan_review_sheet.dart';
+import 'screens/camera_scanner_page.dart';
 import 'auth/auth_service.dart';
 import 'auth/auth_gate.dart';
 import 'controllers/collection_controller.dart';
@@ -99,28 +99,6 @@ class _BootstrapAppState extends State<_BootstrapApp> {
   );
 }
 
-class ScanResult {
-  const ScanResult({required this.seriesName, required this.slot});
-
-  final String seriesName;
-  final int slot;
-
-  static ScanResult? tryParse(String text) {
-    final normalized = text.replaceAll('\n', ' ');
-    final regex = RegExp(r'([A-Za-zÇçĞğİıÖöŞşÜü0-9&\-\s]+?)\s+(\d)\s*/\s*4');
-    final match = regex.firstMatch(normalized);
-    if (match == null) return null;
-    final slot = int.tryParse(match.group(2)!);
-    if (slot == null || slot < 1 || slot > 4) return null;
-    // Seri adından sonundaki "-" ve boşlukları temizle
-    var name = match.group(1)!.trim();
-    // Sonundaki "-" karakterini ve önündeki boşlukları temizle
-    name = name.replaceAll(RegExp(r'\s*-\s*$'), '').trim();
-    if (name.isEmpty) return null;
-    return ScanResult(seriesName: name, slot: slot);
-  }
-}
-
 class LighterCollectionApp extends StatefulWidget {
   const LighterCollectionApp({this.repository, this.onSignOut, super.key});
   final VoidCallback? onSignOut;
@@ -207,6 +185,23 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
                 _selectedIndex == 0 ? 'Koleksiyon' : 'Ekle / Düzenle',
               ),
               actions: [
+                IconButton(
+                  tooltip: 'Uygulama bilgisi',
+                  icon: const Icon(Icons.info_outline),
+                  onPressed: () => showAboutDialog(
+                    context: _modalContext,
+                    applicationName: 'iClip',
+                    applicationVersion: const String.fromEnvironment(
+                      'APP_VERSION',
+                      defaultValue: 'Geliştirme',
+                    ),
+                    children: const [
+                      Text(
+                        'Dört parçalı Clipper serilerinizi ve eksik parçalarınızı takip edin.',
+                      ),
+                    ],
+                  ),
+                ),
                 if (widget.onSignOut != null)
                   IconButton(
                     tooltip: 'Çıkış yap',
@@ -228,6 +223,16 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
             body: Column(
               children: [
                 if (_controller.isSaving) const LinearProgressIndicator(),
+                if (_controller.dataWarning != null)
+                  Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Text(
+                      _controller.dataWarning!,
+                      style: TextStyle(
+                        color: Theme.of(context).colorScheme.error,
+                      ),
+                    ),
+                  ),
                 if (_controller.loadError != null)
                   MaterialBanner(
                     content: Text(_controller.loadError!),
@@ -278,7 +283,7 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
     try {
       final rawText = await Navigator.of(_modalContext).push<String>(
         MaterialPageRoute(
-          builder: (_) => const _CameraScannerPage(),
+          builder: (_) => const CameraScannerPage(),
           fullscreenDialog: true,
         ),
       );
@@ -291,16 +296,22 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
 
       final parsed = ScanResult.tryParse(rawText);
       final query = parsed?.seriesName ?? rawText;
-      final existing = _controller.findBestMatch(query);
+      final ranked = _controller.rankedMatches(query);
+      final existing =
+          ranked.isNotEmpty &&
+              ranked.first.score >= 0.92 &&
+              (ranked.length == 1 ||
+                  ranked.first.score - ranked[1].score >= 0.12)
+          ? ranked.first.series
+          : null;
 
       if (existing != null) {
         _showSeriesStatusSheet(existing, parsed?.slot);
         return;
       }
 
-      final suggestions = _controller
-          .rankedMatches(query)
-          .where((match) => match.score >= 0.08)
+      final suggestions = ranked
+          .where((match) => match.score >= 0.35)
           .take(5)
           .toList();
 
@@ -426,45 +437,22 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
   }
 
   void _showCreateFromScanSheet(ScanResult result) {
-    final modalContext = _modalContext;
-    showModalBottomSheet<void>(
-      context: modalContext,
+    showModalBottomSheet<bool>(
+      context: _modalContext,
+      isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: true,
-      builder: (context) {
-        return Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                'Yeni seri bulundu',
-                style: Theme.of(
-                  context,
-                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
-              ),
-              const SizedBox(height: 8),
-              Text('${result.seriesName} ${result.slot}/4'),
-              const SizedBox(height: 16),
-              FilledButton.icon(
-                icon: const Icon(Icons.add_box_outlined),
-                label: const Text('Seriyi ekle'),
-                onPressed: () async {
-                  final saved = await _controller.upsertSeries(
-                    name: result.seriesName,
-                    ownedPieces: {result.slot},
-                  );
-                  if (saved && context.mounted) {
-                    Navigator.of(context).pop();
-                    _showSnack('${result.seriesName} koleksiyona eklendi.');
-                  }
-                },
-              ),
-            ],
-          ),
-        );
-      },
+      builder: (context) => ScanReviewSheet(
+        result: result,
+        onSave: (name, slot) async {
+          final saved = await _controller.upsertSeries(
+            name: name,
+            ownedPieces: {slot},
+          );
+          if (saved) _showSnack('$name koleksiyona eklendi.');
+          return saved;
+        },
+      ),
     );
   }
 
@@ -877,6 +865,7 @@ class _ManageSeriesViewState extends State<ManageSeriesView> {
   }
 
   void _confirmDelete(LighterSeries series) {
+    final messenger = ScaffoldMessenger.of(context);
     showDialog<void>(
       context: context,
       builder: (context) {
@@ -896,7 +885,7 @@ class _ManageSeriesViewState extends State<ManageSeriesView> {
                 final deleted = await widget.controller.removeSeries(series.id);
                 if (deleted && context.mounted) {
                   Navigator.of(context).pop();
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     SnackBar(
                       content: Text('${series.name} silindi'),
                       behavior: SnackBarBehavior.floating,
@@ -1429,221 +1418,6 @@ class _MatchSuggestionSheet extends StatelessWidget {
             child: const Text('Yeni seri olarak ekle'),
           ),
         ],
-      ),
-    );
-  }
-}
-
-class _CameraScannerPage extends StatefulWidget {
-  const _CameraScannerPage();
-
-  @override
-  State<_CameraScannerPage> createState() => _CameraScannerPageState();
-}
-
-class _CameraScannerPageState extends State<_CameraScannerPage>
-    with WidgetsBindingObserver {
-  final TextRecognizer _textRecognizer = TextRecognizer(
-    script: TextRecognitionScript.latin,
-  );
-  bool _recognizerClosed = false;
-  int _cameraGeneration = 0;
-  CameraController? _cameraController;
-  Future<void>? _initFuture;
-  String? _error;
-  bool _processing = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    _initFuture = _initCamera();
-  }
-
-  Future<void> _initCamera() async {
-    final generation = ++_cameraGeneration;
-    CameraController? controller;
-    try {
-      final cameras = await availableCameras();
-      if (!mounted || generation != _cameraGeneration) return;
-      if (cameras.isEmpty) {
-        setState(() => _error = 'Cihazda kamera bulunamadı.');
-        return;
-      }
-      final selected = cameras.firstWhere(
-        (cam) => cam.lensDirection == CameraLensDirection.back,
-        orElse: () => cameras.first,
-      );
-      controller = CameraController(
-        selected,
-        ResolutionPreset.medium,
-        enableAudio: false,
-        imageFormatGroup: ImageFormatGroup.nv21,
-      );
-      await controller.initialize();
-      if (!mounted || generation != _cameraGeneration) {
-        await controller.dispose();
-        return;
-      }
-      setState(() {
-        _error = null;
-        _cameraController = controller;
-      });
-    } catch (_) {
-      await controller?.dispose();
-      if (mounted && generation == _cameraGeneration) {
-        setState(
-          () => _error =
-              'Kamera açılamadı. Kamera iznini ayarlardan kontrol edin.',
-        );
-      }
-    }
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.inactive ||
-        state == AppLifecycleState.paused) {
-      _cameraGeneration++;
-      final camera = _cameraController;
-      _cameraController = null;
-      unawaited(camera?.dispose());
-    } else if (state == AppLifecycleState.resumed && mounted) {
-      setState(() => _initFuture = _initCamera());
-    }
-  }
-
-  void _closeRecognizer() {
-    if (!_recognizerClosed) {
-      _recognizerClosed = true;
-      unawaited(_textRecognizer.close());
-    }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    _cameraGeneration++;
-    unawaited(_cameraController?.dispose());
-    // An in-flight OCR call closes its recognizer in finally.
-    if (!_processing) _closeRecognizer();
-    super.dispose();
-  }
-
-  Future<void> _scan() async {
-    final controller = _cameraController;
-    if (controller == null || !controller.value.isInitialized || _processing) {
-      return;
-    }
-
-    setState(() {
-      _processing = true;
-      _error = null;
-    });
-
-    XFile? capturedFile;
-    try {
-      // Her taramada yeni bir dosya oluştur
-      capturedFile = await controller.takePicture();
-
-      // Dosyayı işle - her seferinde yeni bir InputImage oluştur
-      final inputImage = InputImage.fromFilePath(capturedFile.path);
-      final recognised = await _textRecognizer.processImage(inputImage);
-
-      // İşlem sonrası dosyayı hemen temizle (cache'i önlemek için)
-      try {
-        final file = File(capturedFile.path);
-        if (await file.exists()) {
-          await file.delete();
-        }
-      } catch (_) {
-        // Dosya silme hatası kritik değil
-      }
-
-      if (!mounted) return;
-
-      // Sonucu al ve kontrol et
-      final resultText = recognised.text.trim();
-
-      // Eğer sonuç boşsa veya önceki ile aynıysa, hata göster
-      if (resultText.isEmpty) {
-        setState(() {
-          _processing = false;
-          _error = 'Metin algılanamadı, tekrar deneyin.';
-        });
-        return;
-      }
-
-      // State'i temizle ve sonucu döndür
-      setState(() {
-        _processing = false;
-      });
-
-      if (mounted) {
-        Navigator.of(context).pop(resultText);
-      }
-    } catch (e) {
-      // Hata durumunda dosyayı temizle
-      if (capturedFile != null) {
-        try {
-          final file = File(capturedFile.path);
-          if (await file.exists()) {
-            await file.delete();
-          }
-        } catch (_) {
-          // Dosya silme hatası kritik değil
-        }
-      }
-
-      if (mounted) {
-        setState(() {
-          _processing = false;
-          _error =
-              'Metin okunamadı. Işığı ve netliği kontrol edip tekrar deneyin.';
-        });
-      }
-    } finally {
-      if (!mounted) _closeRecognizer();
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text('Metni Tara')),
-      body: _error != null
-          ? Center(child: Text(_error!))
-          : FutureBuilder<void>(
-              future: _initFuture,
-              builder: (context, snapshot) {
-                if (_cameraController == null ||
-                    snapshot.connectionState != ConnectionState.done) {
-                  return const Center(child: CircularProgressIndicator());
-                }
-                return Stack(
-                  children: [
-                    Positioned.fill(child: CameraPreview(_cameraController!)),
-                    if (_processing)
-                      Container(
-                        color: Colors.black45,
-                        child: const Center(child: CircularProgressIndicator()),
-                      ),
-                  ],
-                );
-              },
-            ),
-      bottomNavigationBar: Padding(
-        padding: const EdgeInsets.all(16),
-        child: FilledButton.icon(
-          icon: const Icon(Icons.document_scanner_outlined),
-          label: const Text('Metni Tara'),
-          onPressed:
-              _processing ||
-                  _cameraController == null ||
-                  !(_cameraController?.value.isInitialized ?? false)
-              ? null
-              : _scan,
-        ),
       ),
     );
   }

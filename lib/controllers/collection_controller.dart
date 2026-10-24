@@ -1,3 +1,4 @@
+import '../services/ocr.dart';
 import 'dart:async';
 import 'dart:collection';
 import 'dart:math';
@@ -22,6 +23,7 @@ class LighterCollectionController extends ChangeNotifier {
   bool _disposed = false;
   bool _isLoading = true;
   String? loadError;
+  String? dataWarning;
   String? operationError;
   int errorVersion = 0;
   int _completedSeries = 0;
@@ -52,11 +54,22 @@ class LighterCollectionController extends ChangeNotifier {
               final number = a.seriesNumber.compareTo(b.seriesNumber);
               return number == 0 ? a.id.compareTo(b.id) : number;
             });
+          final previousNumbers = {
+            for (final s in _series) s.id: s.seriesNumber,
+          };
+          if (ordered.any(
+            (s) =>
+                previousNumbers.containsKey(s.id) &&
+                previousNumbers[s.id] != s.seriesNumber,
+          )) {
+            dataWarning =
+                'Başka bir kurulum mevcut kayıtların seri numarasını değiştirdi. Eski APK’ları kapatıp tüm cihazları son sürüme güncelleyin.';
+          }
           _series = UnmodifiableListView(ordered);
           _normalizedNames
             ..clear()
             ..addEntries(
-              ordered.map((s) => MapEntry(s.id, _normalizeText(s.name))),
+              ordered.map((s) => MapEntry(s.id, normalizeSeriesName(s.name))),
             );
           _completedSeries = ordered.where((s) => s.isComplete).length;
           final fromData = ordered.isEmpty
@@ -110,24 +123,24 @@ class LighterCollectionController extends ChangeNotifier {
   }
 
   List<SeriesMatch> rankedMatches(String rawText) {
-    final query = _normalizeText(rawText);
+    final query = normalizeSeriesName(rawText);
     if (query.isEmpty) return const [];
     final results = <SeriesMatch>[];
     for (final series in _series) {
-      final score = _matchScore(query, _normalizedNames[series.id]!);
+      final score = seriesNameScore(query, _normalizedNames[series.id]!);
       if (score > 0) results.add(SeriesMatch(series: series, score: score));
     }
     results.sort((a, b) => b.score.compareTo(a.score));
     return results;
   }
 
-  LighterSeries? findBestMatch(String rawText, {double minScore = 0.15}) {
-    final query = _normalizeText(rawText);
+  LighterSeries? findBestMatch(String rawText, {double minScore = 0.92}) {
+    final query = normalizeSeriesName(rawText);
     if (query.isEmpty) return null;
     LighterSeries? best;
     var bestScore = 0.0;
     for (final series in _series) {
-      final score = _matchScore(query, _normalizedNames[series.id]!);
+      final score = seriesNameScore(query, _normalizedNames[series.id]!);
       if (score > bestScore) {
         bestScore = score;
         best = series;
@@ -210,30 +223,6 @@ class LighterCollectionController extends ChangeNotifier {
   static final Random _random = Random.secure();
   static String _newId() =>
       'series-${List.generate(16, (_) => _random.nextInt(256).toRadixString(16).padLeft(2, '0')).join()}';
-
-  static String _normalizeText(String value) => value
-      .replaceAll('İ', 'i')
-      .replaceAll('I', 'ı')
-      .toLowerCase()
-      .replaceAll(RegExp(r'[^a-z0-9çğıöşü\s]'), ' ')
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
-
-  static double _matchScore(String haystack, String needle) {
-    if (needle.isEmpty || haystack.isEmpty) return 0;
-    if (haystack.contains(needle) || needle.contains(haystack)) return 1;
-    final queryTokens = haystack.split(' ').toSet();
-    final needleTokens = needle.split(' ');
-    return needleTokens
-            .where(
-              (token) => queryTokens.any(
-                (candidate) =>
-                    candidate.contains(token) || token.contains(candidate),
-              ),
-            )
-            .length /
-        needleTokens.length;
-  }
 }
 
 class SeriesMatch {

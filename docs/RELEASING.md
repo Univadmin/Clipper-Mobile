@@ -36,8 +36,12 @@ Gerçek değerleri komuta, kaynak koda, issue/PR açıklamasına veya loga yapı
 
 ## Güvenlik sınırı
 
-Bu kullanıcı talebiyle cihazda çalışan bir uygulama kilididir. Başarılı girişten önce koleksiyon repository’si oluşturulmaz; oturum işareti cihazın güvenli deposunda tutulur. Parolanın kendisi APK’ya eklenmez; doğrulama özeti eklenir. APK’yı inceleyen kişi bu kontrolü atlayabilir veya özeti çevrimdışı deneyebilir. Firebase yönetim erişimi olmadığı için sunucu kuralları değiştirilmedi; doğrudan Firebase erişimini bu kilit korumaz. Kullanıcı bu sınırı kabul ederek Secrets ile yayın düzenini seçti.
+Uygulama kilidi cihaz üzerinde çalışır. Başarılı girişten önce koleksiyon repository’si oluşturulmaz; oturum işareti cihazın güvenli deposunda tutulur. Parolanın kendisi APK’ya eklenmez; doğrulama özeti eklenir. APK’yı inceleyen kişi bu kontrolü atlayabilir veya özeti çevrimdışı deneyebilir. Firebase yönetim erişimi olmadığı için sunucu kuralları değiştirilmedi; doğrudan Firebase erişimini bu kilit korumaz. Sunucu erişimini sınırlamak için ayrıca Firebase Authentication ve sunucu kuralları gerekir.
 
 ## Yüklenmiş taslağı onarma
 
 APK derlemesi/yüklemesi tamamlanmış ancak yayın son adımı başarısız olmuşsa `python3 scripts/publish_release.py --finish-draft v<version>+<build>` kullanılabilir. Bu işlem GitHub’daki APK digest’ini SHA256SUMS ile doğrular; APK’yı yeniden yüklemez veya değiştirmez. Ardından taslağı yayımlar ve downloads listesini onarır.
+
+## Üzerine güncelleme kontrolü
+
+1.0.1+2 sürümünün public imza sertifika özeti `android/release-certificate.sha256` dosyasındadır. Yayın öncesi `python3 scripts/check_apk.py`, APK imzasını, `com.iclip` paketini ve pubspec sürüm/build değerini doğrular. Yanlış anahtar veya paketle yayın durur. Mevcut uygulamayı kaldırmadan yeni APK’yı kurun; uygulama verilerini temizlemeyin.
