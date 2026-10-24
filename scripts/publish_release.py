@@ -111,10 +111,12 @@ def publish():
     else:
         raise ValueError('Could not verify version tag')
     if not existing:
-        gh('release', 'create' , tag, '--repo', REPO, '--verify-tag', '--draft',
+        gh('release', 'create', tag, '--repo', REPO, '--verify-tag', '--draft',
            '--title', f'iClip {release_version}', '--notes-file', str(notes))
     gh('release', 'upload', tag, str(target), str(checksums), '--repo', REPO, '--clobber')
-    release = json.loads(gh('api', f'repos/{REPO}/releases/tags/{tag}'))
+    # The by-tag REST endpoint only exposes published releases.
+    # Authenticated listing includes our draft and its uploaded assets.
+    release = next(r for r in all_releases() if r['tag_name'] == tag)
     assets = {a['name']: a for a in release['assets']}
     if assets.get('Clipper.apk', {}).get('size') != target.stat().st_size:
         raise ValueError('Uploaded APK size mismatch')
@@ -124,4 +126,10 @@ def publish():
 
 
 if __name__ == '__main__':
-    publish()
+    import sys
+    if sys.argv[1:] == ['--refresh-downloads']:
+        refresh_downloads()
+    elif not sys.argv[1:]:
+        publish()
+    else:
+        raise SystemExit('Usage: publish_release.py [--refresh-downloads]')
