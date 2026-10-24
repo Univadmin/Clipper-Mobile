@@ -14,3 +14,6 @@ Kimlik çakışması ve parça güncellemesi düzeltmeleri; controller ayrımı,
 
 ## Sonraki adım
 Android cihazda gerçek kamera/OCR ve mevcut Firebase kurallarıyla bağlantı doğrulanmalı. Firebase sunucu koruması için proje sahibinin yetkisi gerekir. İmzalama anahtarını güncellemelerde değiştirmeyin. iOS config sağlanmadı; iOS yayını yok.
+
+## Tamamlanan yayın
+25 Ekim 2026: `v1.0.1+2` GitHub Releases'te yayımlandı; downloads tablosu güncel. Son Actions doğrulaması başarılı (`40134076403`). Gelecek uygulama güncellemelerinde version/build artırılıp main'e gönderilir; aynı Secrets/imza anahtarı kullanılır.

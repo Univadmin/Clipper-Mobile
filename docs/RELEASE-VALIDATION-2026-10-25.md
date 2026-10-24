@@ -17,3 +17,12 @@ Sürüm: `1.0.1+2`. Flutter 3.32.1 / Dart 3.8.1. Önceki sağlık raporu düzelt
 - R8 yalnız Latin dışındaki isteğe bağlı OCR sınıfları için dar kapsamlı dontwarn kurallarıyla düzeltildi; optimizasyon açık.
 
 GitHub Actions sonucu ilgili workflow run ve GitHub Release sayfasından izlenir.
+
+## GitHub yayın sonucu
+
+- `v1.0.1+2` yayımlandı; `Clipper.apk` 41.718.520 bayt ve SHA256SUMS asset'i hazır.
+- GitHub'dan gerçek APK yeniden indirilip dosya özeti, release imzası, kullanıcı/parola doğrulama girdilerinin derlemeye alınması ve düz metin parolanın bulunmaması doğrulandı.
+- `downloads/README.md` otomatik olarak `1.0.1+2 | 25.10.2026 | APK indir` satırını oluşturdu. Sabit son sürüm bağlantısı ve sürüme özel bağlantı doğrulandı.
+- İlk yayın betiğindeki draft/by-tag okuma hatası giderildi. 3 Python yayın testi taslak doğrulaması, sunucu digest kontrolü ve downloads biçimini kapsar.
+- Son tam Actions doğrulaması başarılı: https://github.com/Univadmin/Clipper-Mobile/actions/runs/40134076403 . Analiz, 20 Flutter testi, 3 Python testi, Secrets hazırlama, imzalı derleme ve yayın/listenin güncellenmesi başarılı.
+- Repository'nin gizliliği değiştirilmedi. Private durumda indirme GitHub oturumu gerektirir; public yapıldığında aynı bağlantılar kullanılabilir.
