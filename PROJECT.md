@@ -1,18 +1,16 @@
 # Clipper Mobile — çalışma durumu
 
-## Amaç
-iClip çakmak koleksiyon uygulaması. Seri oluşturma/düzenleme/silme, dört parçalı serilerde sahip olunan parçaları işaretleme, tam/eksik seri filtreleri ve istatistikler sunar. Kamera ve ML Kit OCR ile seri adı/parça numarası okur; Firebase Realtime Database ile verileri tutar.
-
-## Mevcut durum
-LocalProjects kaynağından ilk GitHub aktarımı için kaynak ve dokümantasyon hazırlandı; kontrol bulguları docs/VALIDATION.md içinde. Mevcut ürün sürümü `1.0.0+1`; bu aktarım sürümü yükseltmez. Kaynak klasörü korunuyor; bundan sonra bu repository çalışma kopyası kullanılmalı.
-
 ## Kararlar
-- Ayrı private repository; uygulama kimliği ve sürüm korunur.
-- Kısa AGENTS.md + bu durum dosyası yeterli; ek skill/agent oluşturulmadı.
-- Runtime/local config ve secret Git dışında. GitHub tek ortak sürüm kaynağı.
+- Tek kullanıcı; `collections/default` ve mevcut kayıt alanları korunur.
+- Publice uygun kaynak; Firebase istemci ayarı, uygulama kilidi doğrulama bilgileri ve release anahtarı yalnız Actions Secrets/local ignored config içinde.
+- Firebase yönetim erişimi yok. Kullanıcı cihazdaki giriş kilidinin Firebase kurallarının yerine geçmediğini kabul etti. Firebase Authentication veya sunucu kural değişikliği yapılmaz.
+- Parola açık metin tutulmaz; PBKDF2-HMAC-SHA256 özetiyle yerel kontrol, cihaz güvenli deposunda oturum işareti.
+
+## Mevcut sürüm ve yayın
+`1.0.1+2`. `main` dalında pubspec sürümü artırıldığında Actions imzalı APK, GitHub Release ve downloads listesini üretir. Yayın düzeni `docs/RELEASING.md`, doğrulamalar `docs/RELEASE-VALIDATION-2026-10-25.md` içinde.
+
+## İyileştirmeler
+Kimlik çakışması ve parça güncellemesi düzeltmeleri; controller ayrımı, lazy listeler, arama/form taslağı korunması, hata/yeniden deneme, kamera lifecycle ve izin temizliği. Önceki kayıt: `docs/IMPROVEMENTS-2026-10-24.md`.
 
 ## Sonraki adım
-İlk işte docs/VALIDATION.md bulgularını kontrol et; ilgili yerel ayar/SDK’ları tamamla, canlı sisteme bağlanmadan gerekli testleri düzelt.
-
-## Bilinen noktalar
-Firebase varsayılan collections/default yolu kullanılıyor; kullanıcı ayrımı ve DB güvenlik kuralları ayrıca incelenmeli. Gerçek koleksiyon üzerinde yazma/silme testi yapma. google-services.json ve Apple Firebase config yerelde sağlanmalı. Kamera/ML Kit gerçek cihaz doğrulaması gerektirir. Release şu an debug signing kullanıyor. Mevcut widget testleri Firebase/plugin izolasyonu olmadan çalışmayabilir.
+Android cihazda gerçek kamera/OCR ve mevcut Firebase kurallarıyla bağlantı doğrulanmalı. Firebase sunucu koruması için proje sahibinin yetkisi gerekir. İmzalama anahtarını güncellemelerde değiştirmeyin. iOS config sağlanmadı; iOS yayını yok.

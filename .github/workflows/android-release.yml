@@ -1,0 +1,60 @@
+name: Android APK release
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+    paths: [pubspec.yaml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: android-apk-release
+  cancel-in-progress: false
+jobs:
+  release:
+    if: github.event_name == 'push' || github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: '3.32.1'
+          channel: stable
+          cache: true
+      - run: flutter pub get --enforce-lockfile
+      - run: flutter analyze --no-pub
+      - run: flutter test --no-pub
+      - run: python3 -m unittest discover -s test -p "test_*.py"
+      - name: Prepare private build inputs
+        run: python3 scripts/prepare_release.py
+        env:
+          FIREBASE_ANDROID_CONFIG: ${{ secrets.FIREBASE_ANDROID_CONFIG }}
+          CLIPPER_LOGIN_CONFIG: ${{ secrets.CLIPPER_LOGIN_CONFIG }}
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+      - name: Build signed APK
+        run: flutter build apk --release --no-pub --dart-define-from-file=.release/login.json
+      - name: Publish APK and update downloads
+        run: python3 scripts/publish_release.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Remove private build inputs
+        if: always()
+        shell: python
+        run: |
+          from pathlib import Path
+          import shutil
+          shutil.rmtree('.release', ignore_errors=True)
+          Path('android/key.properties').unlink(missing_ok=True)
+          Path('android/app/google-services.json').unlink(missing_ok=True)

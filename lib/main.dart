@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:collection';
 import 'dart:io';
 import 'dart:math';
 
@@ -8,16 +7,97 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 import 'package:google_mlkit_text_recognition/google_mlkit_text_recognition.dart';
 import 'models/lighter_series.dart';
+import 'auth/auth_service.dart';
+import 'auth/auth_gate.dart';
+import 'controllers/collection_controller.dart';
+export 'controllers/collection_controller.dart';
 import 'repositories/collection_repository.dart';
 import 'repositories/firebase_collection_repository.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  await Firebase.initializeApp();
-  runApp(const LighterCollectionApp());
+  runApp(const _UnlockApp());
 }
 
-enum SeriesFilter { completed, inProgress }
+class _UnlockApp extends StatefulWidget {
+  const _UnlockApp();
+  @override
+  State<_UnlockApp> createState() => _UnlockAppState();
+}
+
+class _UnlockAppState extends State<_UnlockApp> {
+  late final AuthService _auth = LocalAuthService();
+  @override
+  Widget build(BuildContext context) => MaterialApp(
+    debugShowCheckedModeBanner: false,
+    theme: ThemeData(
+      useMaterial3: true,
+      colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepOrangeAccent),
+    ),
+    home: AuthGate(
+      auth: _auth,
+      signedInBuilder: (context, signOut) => _BootstrapApp(onSignOut: signOut),
+    ),
+  );
+}
+
+class _BootstrapApp extends StatefulWidget {
+  const _BootstrapApp({required this.onSignOut});
+  final VoidCallback onSignOut;
+  @override
+  State<_BootstrapApp> createState() => _BootstrapAppState();
+}
+
+class _BootstrapAppState extends State<_BootstrapApp> {
+  late Future<void> _initialization;
+
+  @override
+  void initState() {
+    super.initState();
+    _initialization = _initialize();
+  }
+
+  Future<void> _initialize() async {
+    if (Firebase.apps.isEmpty) await Firebase.initializeApp();
+  }
+
+  @override
+  Widget build(BuildContext context) => FutureBuilder<void>(
+    future: _initialization,
+    builder: (context, snapshot) {
+      if (snapshot.connectionState == ConnectionState.done &&
+          !snapshot.hasError) {
+        return LighterCollectionApp(onSignOut: widget.onSignOut);
+      }
+      return MaterialApp(
+        home: Scaffold(
+          body: Center(
+            child: snapshot.hasError
+                ? Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        const Text(
+                          'Koleksiyon bağlantısı başlatılamadı. Bağlantıyı ve uygulama ayarlarını kontrol edin.',
+                        ),
+                        const SizedBox(height: 16),
+                        FilledButton(
+                          onPressed: () => setState(() {
+                            _initialization = _initialize();
+                          }),
+                          child: const Text('Yeniden dene'),
+                        ),
+                      ],
+                    ),
+                  )
+                : const CircularProgressIndicator(),
+          ),
+        ),
+      );
+    },
+  );
+}
 
 class ScanResult {
   const ScanResult({required this.seriesName, required this.slot});
@@ -27,8 +107,7 @@ class ScanResult {
 
   static ScanResult? tryParse(String text) {
     final normalized = text.replaceAll('\n', ' ');
-    final regex =
-        RegExp(r'([A-Za-zÇçĞğİıÖöŞşÜü0-9&\-\s]+?)\s+(\d)\s*/\s*4');
+    final regex = RegExp(r'([A-Za-zÇçĞğİıÖöŞşÜü0-9&\-\s]+?)\s+(\d)\s*/\s*4');
     final match = regex.firstMatch(normalized);
     if (match == null) return null;
     final slot = int.tryParse(match.group(2)!);
@@ -43,7 +122,10 @@ class ScanResult {
 }
 
 class LighterCollectionApp extends StatefulWidget {
-  const LighterCollectionApp({super.key});
+  const LighterCollectionApp({this.repository, this.onSignOut, super.key});
+  final VoidCallback? onSignOut;
+
+  final CollectionRepository? repository;
 
   @override
   State<LighterCollectionApp> createState() => _LighterCollectionAppState();
@@ -51,27 +133,40 @@ class LighterCollectionApp extends StatefulWidget {
 
 class _LighterCollectionAppState extends State<LighterCollectionApp> {
   late final LighterCollectionController _controller;
-  
+
   @override
   void initState() {
     super.initState();
-    final repository = FirebaseCollectionRepository();
-    _controller = LighterCollectionController(repo: repository);
+    _controller = LighterCollectionController(
+      repo: widget.repository ?? FirebaseCollectionRepository(),
+    );
+    _controller.addListener(_onControllerChanged);
   }
-  final TextRecognizer _textRecognizer = TextRecognizer();
+
   final GlobalKey<ScaffoldMessengerState> _messengerKey =
       GlobalKey<ScaffoldMessengerState>();
   final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
   int _selectedIndex = 0;
 
+  int _lastErrorVersion = 0;
+
+  void _onControllerChanged() {
+    if (_controller.errorVersion != _lastErrorVersion) {
+      _lastErrorVersion = _controller.errorVersion;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted && _controller.operationError != null) {
+          _showSnack(_controller.operationError!);
+        }
+      });
+    }
+  }
+
   BuildContext get _modalContext =>
-      _navigatorKey.currentContext ??
-      _messengerKey.currentContext ??
-      context;
+      _navigatorKey.currentContext ?? _messengerKey.currentContext ?? context;
 
   @override
   void dispose() {
-    _textRecognizer.close();
+    _controller.removeListener(_onControllerChanged);
     _controller.dispose();
     super.dispose();
   }
@@ -86,14 +181,14 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
     return AnimatedBuilder(
       animation: _controller,
       builder: (context, _) {
-    return MaterialApp(
-      debugShowCheckedModeBanner: false,
+        return MaterialApp(
+          debugShowCheckedModeBanner: false,
           title: 'iClip',
           scaffoldMessengerKey: _messengerKey,
           navigatorKey: _navigatorKey,
-      theme: ThemeData(
-        colorScheme: colorScheme,
-        useMaterial3: true,
+          theme: ThemeData(
+            colorScheme: colorScheme,
+            useMaterial3: true,
             scaffoldBackgroundColor: const Color(0xFFF7F4F1),
             appBarTheme: AppBarTheme(
               backgroundColor: Colors.white,
@@ -108,9 +203,16 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
           ),
           home: Scaffold(
             appBar: AppBar(
-              title:
-                  Text(_selectedIndex == 0 ? 'Koleksiyon' : 'Ekle / Düzenle'),
+              title: Text(
+                _selectedIndex == 0 ? 'Koleksiyon' : 'Ekle / Düzenle',
+              ),
               actions: [
+                if (widget.onSignOut != null)
+                  IconButton(
+                    tooltip: 'Çıkış yap',
+                    icon: const Icon(Icons.logout),
+                    onPressed: _controller.isSaving ? null : widget.onSignOut,
+                  ),
                 IconButton(
                   tooltip: 'Kamerayla tara',
                   icon: const Icon(Icons.camera_alt_outlined),
@@ -123,14 +225,32 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
                 ),
               ],
             ),
-            body: AnimatedSwitcher(
-              duration: const Duration(milliseconds: 250),
-              child: _selectedIndex == 0
-                  ? CollectionListView(
-                      controller: _controller,
-                      onFilterTap: _showFilterSheet,
-                    )
-                  : ManageSeriesView(controller: _controller),
+            body: Column(
+              children: [
+                if (_controller.isSaving) const LinearProgressIndicator(),
+                if (_controller.loadError != null)
+                  MaterialBanner(
+                    content: Text(_controller.loadError!),
+                    actions: [
+                      TextButton(
+                        onPressed: _controller.retry,
+                        child: const Text('Yeniden dene'),
+                      ),
+                    ],
+                  ),
+                Expanded(
+                  child: IndexedStack(
+                    index: _selectedIndex,
+                    children: [
+                      CollectionListView(
+                        controller: _controller,
+                        onFilterTap: _showFilterSheet,
+                      ),
+                      ManageSeriesView(controller: _controller),
+                    ],
+                  ),
+                ),
+              ],
             ),
             bottomNavigationBar: NavigationBar(
               selectedIndex: _selectedIndex,
@@ -158,14 +278,13 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
     try {
       final rawText = await Navigator.of(_modalContext).push<String>(
         MaterialPageRoute(
-          builder: (_) => _CameraScannerPage(
-            textRecognizer: _textRecognizer,
-          ),
+          builder: (_) => const _CameraScannerPage(),
           fullscreenDialog: true,
         ),
       );
 
-      if (!mounted || rawText == null || rawText.trim().isEmpty) {
+      if (!mounted || rawText == null) return;
+      if (rawText.trim().isEmpty) {
         _showSnack('Metin algılanamadı, tekrar dene.');
         return;
       }
@@ -190,10 +309,8 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
           context: _modalContext,
           useSafeArea: true,
           showDragHandle: true,
-          builder: (context) => _MatchSuggestionSheet(
-            query: query,
-            matches: suggestions,
-          ),
+          builder: (context) =>
+              _MatchSuggestionSheet(query: query, matches: suggestions),
         );
         if (!mounted) return;
         if (selected != null) {
@@ -227,8 +344,9 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
           builder: (context, _) {
             final current = _controller.getById(series.id) ?? series;
             final hasSlotInfo = slot != null;
-            final slotOwned =
-                slot != null ? current.hasPiece(slot) : current.isComplete;
+            final slotOwned = slot != null
+                ? current.hasPiece(slot)
+                : current.isComplete;
 
             return Padding(
               padding: const EdgeInsets.all(20),
@@ -238,10 +356,9 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
                 children: [
                   Text(
                     current.name,
-                    style: Theme.of(context)
-                        .textTheme
-                        .titleMedium
-                        ?.copyWith(fontWeight: FontWeight.w600),
+                    style: Theme.of(context).textTheme.titleMedium?.copyWith(
+                      fontWeight: FontWeight.w600,
+                    ),
                   ),
                   const SizedBox(height: 12),
                   _PieceStatusRow(serie: current, highlightSlot: slot),
@@ -250,10 +367,10 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
                     current.isComplete
                         ? 'Bu seri tamamen sende.'
                         : hasSlotInfo
-                            ? slotOwned
-                                ? '$slot/4 zaten koleksiyonunda.'
-                                : '$slot/4 henüz eklenmemiş.'
-                            : 'Eksik parçaları aşağıdan işaretleyebilirsin.',
+                        ? slotOwned
+                              ? '$slot/4 zaten koleksiyonunda.'
+                              : '$slot/4 henüz eklenmemiş.'
+                        : 'Eksik parçaları aşağıdan işaretleyebilirsin.',
                   ),
                   const SizedBox(height: 12),
                   Wrap(
@@ -264,8 +381,13 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
                       return FilterChip(
                         label: Text('$pos/4'),
                         selected: owned,
-                        onSelected: (value) async =>
-                            await _controller.setPiece(current.id, pos, value),
+                        onSelected: _controller.isBusy(current.id)
+                            ? null
+                            : (value) async => await _controller.setPiece(
+                                current.id,
+                                pos,
+                                value,
+                              ),
                       );
                     }),
                   ),
@@ -275,8 +397,12 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
                       icon: const Icon(Icons.add_circle_outline),
                       label: Text('$slot/4 çakmağını ekle'),
                       onPressed: () async {
-                        await _controller.setPiece(current.id, slot, true);
-                        if (context.mounted) {
+                        final saved = await _controller.setPiece(
+                          current.id,
+                          slot,
+                          true,
+                        );
+                        if (saved && context.mounted) {
                           Navigator.of(context).pop();
                           _showSnack(
                             '${current.name} $slot/4 koleksiyona eklendi.',
@@ -314,10 +440,9 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
             children: [
               Text(
                 'Yeni seri bulundu',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w600),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 8),
               Text('${result.seriesName} ${result.slot}/4'),
@@ -325,13 +450,15 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
               FilledButton.icon(
                 icon: const Icon(Icons.add_box_outlined),
                 label: const Text('Seriyi ekle'),
-                onPressed: () {
-                  _controller.upsertSeries(
+                onPressed: () async {
+                  final saved = await _controller.upsertSeries(
                     name: result.seriesName,
                     ownedPieces: {result.slot},
                   );
-                  Navigator.of(context).pop();
-                  _showSnack('${result.seriesName} koleksiyona eklendi.');
+                  if (saved && context.mounted) {
+                    Navigator.of(context).pop();
+                    _showSnack('${result.seriesName} koleksiyona eklendi.');
+                  }
                 },
               ),
             ],
@@ -356,10 +483,9 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
             children: [
               Text(
                 'Seri bulunamadı',
-                style: Theme.of(context)
-                    .textTheme
-                    .titleMedium
-                    ?.copyWith(fontWeight: FontWeight.w600),
+                style: Theme.of(
+                  context,
+                ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
               ),
               const SizedBox(height: 8),
               Text(
@@ -407,13 +533,9 @@ class _LighterCollectionAppState extends State<LighterCollectionApp> {
 
   void _showSnack(String message) {
     _messengerKey.currentState?.showSnackBar(
-      SnackBar(
-        content: Text(message),
-        behavior: SnackBarBehavior.floating,
-      ),
+      SnackBar(content: Text(message), behavior: SnackBarBehavior.floating),
     );
   }
-
 }
 
 class CollectionListView extends StatefulWidget {
@@ -445,21 +567,20 @@ class _CollectionListViewState extends State<CollectionListView> {
     return AnimatedBuilder(
       animation: widget.controller,
       builder: (context, _) {
+        final q = _query.trim().toLowerCase();
         final filtered = widget.controller.series.where((serie) {
-          final q = _query.toLowerCase();
           return serie.name.toLowerCase().contains(q) ||
               serie.seriesNumber.toString().contains(q);
         }).toList();
 
         if (widget.controller.isLoading) {
-          return const Center(
-            child: CircularProgressIndicator(),
-          );
+          return const Center(child: CircularProgressIndicator());
         }
 
         return Padding(
           padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
           child: CustomScrollView(
+            key: const PageStorageKey('collection-series'),
             slivers: [
               SliverToBoxAdapter(child: _buildSearchBar(context)),
               SliverToBoxAdapter(
@@ -470,17 +591,24 @@ class _CollectionListViewState extends State<CollectionListView> {
                   onFilterTap: widget.onFilterTap,
                 ),
               ),
-              SliverToBoxAdapter(
-                child: filtered.isEmpty
-                    ? _EmptyState(
-                        query: _query,
-                        onClear: () {
-                          _searchController.clear();
-                          setState(() => _query = '');
-                        },
-                      )
-                    : _SeriesDataTable(series: filtered),
-              ),
+              if (filtered.isEmpty)
+                SliverToBoxAdapter(
+                  child: _EmptyState(
+                    query: _query,
+                    onClear: () {
+                      _searchController.clear();
+                      setState(() => _query = '');
+                    },
+                  ),
+                )
+              else
+                SliverList.builder(
+                  itemCount: filtered.length,
+                  itemBuilder: (context, index) => _CollectionSeriesCard(
+                    key: ValueKey(filtered[index].id),
+                    series: filtered[index],
+                  ),
+                ),
             ],
           ),
         );
@@ -492,7 +620,7 @@ class _CollectionListViewState extends State<CollectionListView> {
     return SearchBar(
       controller: _searchController,
       hintText: 'Seri veya model ara...',
-      padding: const MaterialStatePropertyAll(
+      padding: const WidgetStatePropertyAll(
         EdgeInsets.symmetric(horizontal: 16, vertical: 4),
       ),
       onChanged: (value) => setState(() => _query = value),
@@ -537,50 +665,53 @@ class _ManageSeriesViewState extends State<ManageSeriesView> {
       animation: widget.controller,
       builder: (context, _) {
         final series = widget.controller.series;
-        final bottomPadding =
-            MediaQuery.of(context).viewPadding.bottom + 20;
+        final bottomPadding = MediaQuery.of(context).viewPadding.bottom + 20;
         return SafeArea(
-          child: ListView(
-            padding: EdgeInsets.fromLTRB(20, 20, 20, bottomPadding),
-            children: [
-              _buildFormCard(context),
-              const SizedBox(height: 28),
-              Text(
-                'Mevcut Setler',
-                style: Theme.of(context).textTheme.titleMedium,
-              ),
-              const SizedBox(height: 12),
-              if (series.isEmpty)
-                Card(
-                  child: Padding(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: 20,
-                      vertical: 32,
-                    ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const [
-                        Text(
-                          'Henüz kayıtlı bir seri yok.',
-                          style: TextStyle(fontWeight: FontWeight.w600),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Yeni eklediğiniz her seri burada düzenlenebilir olacak.',
-                        ),
-                      ],
-                    ),
+          child: CustomScrollView(
+            key: const PageStorageKey('manage-series'),
+            slivers: [
+              SliverPadding(
+                padding: const EdgeInsets.fromLTRB(20, 20, 20, 12),
+                sliver: SliverToBoxAdapter(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      _buildFormCard(context),
+                      const SizedBox(height: 28),
+                      Text(
+                        'Mevcut Setler',
+                        style: Theme.of(context).textTheme.titleMedium,
+                      ),
+                    ],
                   ),
-                )
-              else
-              ...series.map(
-                (serie) => _ManageSeriesCard(
-                  key: ValueKey(serie.id),
-                  series: serie,
-                  controller: widget.controller,
-                  onEdit: () => _openEditDialog(serie),
-                  onDelete: () => _confirmDelete(serie),
                 ),
+              ),
+              SliverPadding(
+                padding: EdgeInsets.fromLTRB(20, 0, 20, bottomPadding),
+                sliver: series.isEmpty
+                    ? const SliverToBoxAdapter(
+                        child: Card(
+                          child: Padding(
+                            padding: EdgeInsets.all(24),
+                            child: Text(
+                              'Henüz kayıtlı bir seri yok. Yeni eklediğiniz seriler burada görünecek.',
+                            ),
+                          ),
+                        ),
+                      )
+                    : SliverList.builder(
+                        itemCount: series.length,
+                        itemBuilder: (context, index) {
+                          final serie = series[index];
+                          return _ManageSeriesCard(
+                            key: ValueKey(serie.id),
+                            series: serie,
+                            controller: widget.controller,
+                            onEdit: () => _openEditDialog(serie),
+                            onDelete: () => _confirmDelete(serie),
+                          );
+                        },
+                      ),
               ),
             ],
           ),
@@ -641,7 +772,12 @@ class _ManageSeriesViewState extends State<ManageSeriesView> {
                 child: FilledButton.icon(
                   icon: const Icon(Icons.add_circle_outline),
                   label: const Text('Seriyi Kaydet'),
-                  onPressed: _handleSubmit,
+                  onPressed:
+                      widget.controller.isSaving ||
+                          widget.controller.isLoading ||
+                          widget.controller.loadError != null
+                      ? null
+                      : _handleSubmit,
                 ),
               ),
             ],
@@ -654,12 +790,12 @@ class _ManageSeriesViewState extends State<ManageSeriesView> {
   Future<void> _handleSubmit() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
 
-    await widget.controller.upsertSeries(
+    final saved = await widget.controller.upsertSeries(
       name: _modelController.text.trim(),
       ownedPieces: _ownedPieces,
     );
 
-    if (mounted) {
+    if (saved && mounted) {
       setState(() {
         _modelController.clear();
         _ownedPieces.clear();
@@ -674,11 +810,11 @@ class _ManageSeriesViewState extends State<ManageSeriesView> {
     }
   }
 
-  void _openEditDialog(LighterSeries series) {
-    final modelController = TextEditingController(text: series.name);
+  Future<void> _openEditDialog(LighterSeries series) async {
+    var editedName = series.name;
     final ownedPieces = {...series.ownedPieces};
 
-    showDialog<void>(
+    await showDialog<void>(
       context: context,
       builder: (context) {
         return StatefulBuilder(
@@ -689,8 +825,9 @@ class _ManageSeriesViewState extends State<ManageSeriesView> {
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    TextField(
-                      controller: modelController,
+                    TextFormField(
+                      initialValue: series.name,
+                      onChanged: (value) => editedName = value,
                       decoration: const InputDecoration(
                         labelText: 'Seri / Model Adı',
                       ),
@@ -718,14 +855,14 @@ class _ManageSeriesViewState extends State<ManageSeriesView> {
                 ),
                 FilledButton(
                   onPressed: () async {
-                    final updatedName = modelController.text.trim();
+                    final updatedName = editedName.trim();
                     if (updatedName.isEmpty) return;
-                    await widget.controller.upsertSeries(
+                    final saved = await widget.controller.upsertSeries(
                       id: series.id,
                       name: updatedName,
                       ownedPieces: ownedPieces,
                     );
-                    if (context.mounted) {
+                    if (saved && context.mounted) {
                       Navigator.of(context).pop();
                     }
                   },
@@ -754,12 +891,10 @@ class _ManageSeriesViewState extends State<ManageSeriesView> {
               child: const Text('Vazgeç'),
             ),
             FilledButton(
-              style: FilledButton.styleFrom(
-                backgroundColor: Colors.redAccent,
-              ),
+              style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
               onPressed: () async {
-                await widget.controller.removeSeries(series.id);
-                if (context.mounted) {
+                final deleted = await widget.controller.removeSeries(series.id);
+                if (deleted && context.mounted) {
                   Navigator.of(context).pop();
                   ScaffoldMessenger.of(context).showSnackBar(
                     SnackBar(
@@ -778,79 +913,42 @@ class _ManageSeriesViewState extends State<ManageSeriesView> {
   }
 }
 
-class _SeriesDataTable extends StatelessWidget {
-  const _SeriesDataTable({required this.series});
-
-  final List<LighterSeries> series;
+class _CollectionSeriesCard extends StatelessWidget {
+  const _CollectionSeriesCard({required this.series, super.key});
+  final LighterSeries series;
 
   @override
   Widget build(BuildContext context) {
-    final theme = Theme.of(context);
     return Card(
-      margin: const EdgeInsets.only(top: 20),
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: DataTable(
-          dataRowMinHeight: 96,
-          dataRowMaxHeight: 140,
-          columns: const [
-            DataColumn(
-              label: Text(
-                'Seri / Model',
-                style: TextStyle(fontWeight: FontWeight.w600),
-              ),
-            ),
-            DataColumn(
-              numeric: true,
-              label: Text(
-                'Seri No',
-                style: TextStyle(fontWeight: FontWeight.w600),
+      margin: const EdgeInsets.only(top: 12),
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Row(
+          children: [
+            _SeriesNumberBadge(number: series.seriesNumber),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    series.name,
+                    style: Theme.of(context).textTheme.titleSmall,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 8),
+                  _PieceStatusRow(serie: series),
+                  const SizedBox(height: 8),
+                  Text(
+                    series.isComplete
+                        ? 'Tamamlandı'
+                        : 'Eksik parçalar: ${series.missingPieces.join(', ')}',
+                  ),
+                ],
               ),
             ),
           ],
-          rows: series
-              .map(
-                (serie) => DataRow(
-                  key: ValueKey(serie.id),
-                  cells: [
-                    DataCell(
-                      Row(
-                        children: [
-                          _SeriesNumberBadge(number: serie.seriesNumber),
-                          const SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              mainAxisSize: MainAxisSize.min,
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '${serie.name} */4',
-                                  style: theme.textTheme.titleSmall
-                                      ?.copyWith(fontWeight: FontWeight.w600),
-                                ),
-                                const SizedBox(height: 8),
-                                _PieceStatusRow(serie: serie),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    DataCell(
-                      Text(
-                        serie.seriesNumber.toString(),
-                        style: TextStyle(
-                          fontWeight: FontWeight.w600,
-                          color: serie.isComplete
-                              ? theme.colorScheme.primary
-                              : theme.colorScheme.onSurfaceVariant,
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              )
-              .toList(),
         ),
       ),
     );
@@ -878,23 +976,21 @@ class _PieceStatusRow extends StatelessWidget {
           decoration: BoxDecoration(
             borderRadius: BorderRadius.circular(10),
             color: owned
-                ? colorScheme.primary.withOpacity(0.15)
-                : colorScheme.surfaceVariant,
+                ? colorScheme.primary.withValues(alpha: 0.15)
+                : colorScheme.surfaceContainerHighest,
             border: Border.all(
               color: isHighlighted
                   ? colorScheme.secondary
                   : owned
-                      ? colorScheme.primary
-                      : colorScheme.outlineVariant,
+                  ? colorScheme.primary
+                  : colorScheme.outlineVariant,
             ),
           ),
           child: Text(
             '$slot/4',
             style: TextStyle(
               fontWeight: FontWeight.w600,
-              color: owned
-                  ? colorScheme.primary
-                  : colorScheme.onSurfaceVariant,
+              color: owned ? colorScheme.primary : colorScheme.onSurfaceVariant,
             ),
           ),
         );
@@ -904,10 +1000,7 @@ class _PieceStatusRow extends StatelessWidget {
 }
 
 class _PieceSelector extends StatelessWidget {
-  const _PieceSelector({
-    required this.ownedPieces,
-    required this.onToggle,
-  });
+  const _PieceSelector({required this.ownedPieces, required this.onToggle});
 
   final Set<int> ownedPieces;
   final ValueChanged<int> onToggle;
@@ -971,9 +1064,7 @@ class _ManageSeriesCard extends StatelessWidget {
                     children: [
                       Text(
                         series.name,
-                        style: Theme.of(context)
-                            .textTheme
-                            .titleMedium
+                        style: Theme.of(context).textTheme.titleMedium
                             ?.copyWith(fontWeight: FontWeight.w600),
                       ),
                       Text(
@@ -988,12 +1079,12 @@ class _ManageSeriesCard extends StatelessWidget {
                   mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
-                      onPressed: onEdit,
+                      onPressed: controller.isBusy(series.id) ? null : onEdit,
                       icon: const Icon(Icons.edit_outlined),
                       tooltip: 'Seriyi düzenle',
                     ),
                     IconButton(
-                      onPressed: onDelete,
+                      onPressed: controller.isBusy(series.id) ? null : onDelete,
                       icon: const Icon(Icons.delete_outline),
                       color: Colors.redAccent,
                       tooltip: 'Seriyi sil',
@@ -1013,8 +1104,10 @@ class _ManageSeriesCard extends StatelessWidget {
                 return FilterChip(
                   label: Text('$slot/4'),
                   selected: owned,
-                  onSelected: (value) async =>
-                      await controller.setPiece(series.id, slot, value),
+                  onSelected: controller.isBusy(series.id)
+                      ? null
+                      : (value) async =>
+                            await controller.setPiece(series.id, slot, value),
                 );
               }),
             ),
@@ -1023,7 +1116,7 @@ class _ManageSeriesCard extends StatelessWidget {
               value: series.completionRatio,
               minHeight: 6,
               color: colorScheme.primary,
-              backgroundColor: colorScheme.surfaceVariant,
+              backgroundColor: colorScheme.surfaceContainerHighest,
             ),
             const SizedBox(height: 6),
             Text('Toplanan: ${series.ownedCount} / 4'),
@@ -1047,6 +1140,10 @@ class _CollectionStats extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    if (MediaQuery.sizeOf(context).width < 600 ||
+        MediaQuery.textScalerOf(context).scale(1) > 1.2) {
+      return const SizedBox.shrink();
+    }
     final style = Theme.of(context).textTheme.labelLarge;
     return Padding(
       padding: const EdgeInsets.symmetric(horizontal: 8),
@@ -1056,10 +1153,7 @@ class _CollectionStats extends StatelessWidget {
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
           Text('Toplam: $total', style: style),
-          Text(
-            'Tamamlanan: $completed | Devam: $inProgress',
-            style: style,
-          ),
+          Text('Tamamlanan: $completed | Devam: $inProgress', style: style),
         ],
       ),
     );
@@ -1133,7 +1227,7 @@ class _HighlightChip extends StatelessWidget {
     final chipBody = Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
       decoration: BoxDecoration(
-        color: color.withOpacity(0.08),
+        color: color.withValues(alpha: 0.08),
         borderRadius: BorderRadius.circular(16),
       ),
       child: Row(
@@ -1148,9 +1242,9 @@ class _HighlightChip extends StatelessWidget {
               Text(
                 value,
                 style: Theme.of(context).textTheme.titleMedium?.copyWith(
-                      fontWeight: FontWeight.bold,
-                      color: color,
-                    ),
+                  fontWeight: FontWeight.bold,
+                  color: color,
+                ),
               ),
             ],
           ),
@@ -1187,10 +1281,9 @@ class _EmptyState extends StatelessWidget {
           const SizedBox(height: 12),
           Text(
             'Sonuç bulunamadı',
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
-                ?.copyWith(fontWeight: FontWeight.w600),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
           Text(
@@ -1198,10 +1291,7 @@ class _EmptyState extends StatelessWidget {
             textAlign: TextAlign.center,
           ),
           const SizedBox(height: 12),
-          TextButton(
-            onPressed: onClear,
-            child: const Text('Aramayı temizle'),
-          ),
+          TextButton(onPressed: onClear, child: const Text('Aramayı temizle')),
         ],
       ),
     );
@@ -1218,7 +1308,7 @@ class _SeriesNumberBadge extends StatelessWidget {
     final colorScheme = Theme.of(context).colorScheme;
     return CircleAvatar(
       radius: 16,
-      backgroundColor: colorScheme.primary.withOpacity(0.12),
+      backgroundColor: colorScheme.primary.withValues(alpha: 0.12),
       child: Text(
         '$number',
         style: TextStyle(
@@ -1246,10 +1336,9 @@ class _FilterResultSheet extends StatelessWidget {
         children: [
           Text(
             title,
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
-                ?.copyWith(fontWeight: FontWeight.w600),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 16),
           if (series.isEmpty)
@@ -1298,10 +1387,7 @@ class _FilterResultSheet extends StatelessWidget {
 }
 
 class _MatchSuggestionSheet extends StatelessWidget {
-  const _MatchSuggestionSheet({
-    required this.query,
-    required this.matches,
-  });
+  const _MatchSuggestionSheet({required this.query, required this.matches});
 
   final String query;
   final List<SeriesMatch> matches;
@@ -1315,10 +1401,9 @@ class _MatchSuggestionSheet extends StatelessWidget {
         children: [
           Text(
             '"$query"',
-            style: Theme.of(context)
-                .textTheme
-                .titleMedium
-                ?.copyWith(fontWeight: FontWeight.w600),
+            style: Theme.of(
+              context,
+            ).textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w600),
           ),
           const SizedBox(height: 8),
           Text(
@@ -1350,15 +1435,19 @@ class _MatchSuggestionSheet extends StatelessWidget {
 }
 
 class _CameraScannerPage extends StatefulWidget {
-  const _CameraScannerPage({required this.textRecognizer});
-
-  final TextRecognizer textRecognizer;
+  const _CameraScannerPage();
 
   @override
   State<_CameraScannerPage> createState() => _CameraScannerPageState();
 }
 
-class _CameraScannerPageState extends State<_CameraScannerPage> {
+class _CameraScannerPageState extends State<_CameraScannerPage>
+    with WidgetsBindingObserver {
+  final TextRecognizer _textRecognizer = TextRecognizer(
+    script: TextRecognitionScript.latin,
+  );
+  bool _recognizerClosed = false;
+  int _cameraGeneration = 0;
   CameraController? _cameraController;
   Future<void>? _initFuture;
   String? _error;
@@ -1367,12 +1456,16 @@ class _CameraScannerPageState extends State<_CameraScannerPage> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _initFuture = _initCamera();
   }
 
   Future<void> _initCamera() async {
+    final generation = ++_cameraGeneration;
+    CameraController? controller;
     try {
       final cameras = await availableCameras();
+      if (!mounted || generation != _cameraGeneration) return;
       if (cameras.isEmpty) {
         setState(() => _error = 'Cihazda kamera bulunamadı.');
         return;
@@ -1381,22 +1474,59 @@ class _CameraScannerPageState extends State<_CameraScannerPage> {
         (cam) => cam.lensDirection == CameraLensDirection.back,
         orElse: () => cameras.first,
       );
-      final controller = CameraController(
+      controller = CameraController(
         selected,
         ResolutionPreset.medium,
         enableAudio: false,
         imageFormatGroup: ImageFormatGroup.nv21,
       );
       await controller.initialize();
-      setState(() => _cameraController = controller);
-    } catch (e) {
-      setState(() => _error = 'Kamera başlatılamadı: $e');
+      if (!mounted || generation != _cameraGeneration) {
+        await controller.dispose();
+        return;
+      }
+      setState(() {
+        _error = null;
+        _cameraController = controller;
+      });
+    } catch (_) {
+      await controller?.dispose();
+      if (mounted && generation == _cameraGeneration) {
+        setState(
+          () => _error =
+              'Kamera açılamadı. Kamera iznini ayarlardan kontrol edin.',
+        );
+      }
+    }
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.inactive ||
+        state == AppLifecycleState.paused) {
+      _cameraGeneration++;
+      final camera = _cameraController;
+      _cameraController = null;
+      unawaited(camera?.dispose());
+    } else if (state == AppLifecycleState.resumed && mounted) {
+      setState(() => _initFuture = _initCamera());
+    }
+  }
+
+  void _closeRecognizer() {
+    if (!_recognizerClosed) {
+      _recognizerClosed = true;
+      unawaited(_textRecognizer.close());
     }
   }
 
   @override
   void dispose() {
-    _cameraController?.dispose();
+    WidgetsBinding.instance.removeObserver(this);
+    _cameraGeneration++;
+    unawaited(_cameraController?.dispose());
+    // An in-flight OCR call closes its recognizer in finally.
+    if (!_processing) _closeRecognizer();
     super.dispose();
   }
 
@@ -1405,21 +1535,21 @@ class _CameraScannerPageState extends State<_CameraScannerPage> {
     if (controller == null || !controller.value.isInitialized || _processing) {
       return;
     }
-    
+
     setState(() {
       _processing = true;
       _error = null;
     });
-    
+
     XFile? capturedFile;
     try {
       // Her taramada yeni bir dosya oluştur
       capturedFile = await controller.takePicture();
-      
+
       // Dosyayı işle - her seferinde yeni bir InputImage oluştur
       final inputImage = InputImage.fromFilePath(capturedFile.path);
-      final recognised = await widget.textRecognizer.processImage(inputImage);
-      
+      final recognised = await _textRecognizer.processImage(inputImage);
+
       // İşlem sonrası dosyayı hemen temizle (cache'i önlemek için)
       try {
         final file = File(capturedFile.path);
@@ -1429,15 +1559,12 @@ class _CameraScannerPageState extends State<_CameraScannerPage> {
       } catch (_) {
         // Dosya silme hatası kritik değil
       }
-      
-      if (!mounted) {
-        setState(() => _processing = false);
-        return;
-      }
-      
+
+      if (!mounted) return;
+
       // Sonucu al ve kontrol et
       final resultText = recognised.text.trim();
-      
+
       // Eğer sonuç boşsa veya önceki ile aynıysa, hata göster
       if (resultText.isEmpty) {
         setState(() {
@@ -1446,12 +1573,12 @@ class _CameraScannerPageState extends State<_CameraScannerPage> {
         });
         return;
       }
-      
+
       // State'i temizle ve sonucu döndür
       setState(() {
         _processing = false;
       });
-      
+
       if (mounted) {
         Navigator.of(context).pop(resultText);
       }
@@ -1467,22 +1594,23 @@ class _CameraScannerPageState extends State<_CameraScannerPage> {
           // Dosya silme hatası kritik değil
         }
       }
-      
+
       if (mounted) {
         setState(() {
           _processing = false;
-          _error = 'Okuma başarısız: $e';
+          _error =
+              'Metin okunamadı. Işığı ve netliği kontrol edip tekrar deneyin.';
         });
       }
+    } finally {
+      if (!mounted) _closeRecognizer();
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      appBar: AppBar(
-        title: const Text('Metni Tara'),
-      ),
+      appBar: AppBar(title: const Text('Metni Tara')),
       body: _error != null
           ? Center(child: Text(_error!))
           : FutureBuilder<void>(
@@ -1494,15 +1622,11 @@ class _CameraScannerPageState extends State<_CameraScannerPage> {
                 }
                 return Stack(
                   children: [
-                    Positioned.fill(
-                      child: CameraPreview(_cameraController!),
-                    ),
+                    Positioned.fill(child: CameraPreview(_cameraController!)),
                     if (_processing)
                       Container(
                         color: Colors.black45,
-                        child: const Center(
-                          child: CircularProgressIndicator(),
-                        ),
+                        child: const Center(child: CircularProgressIndicator()),
                       ),
                   ],
                 );
@@ -1513,7 +1637,8 @@ class _CameraScannerPageState extends State<_CameraScannerPage> {
         child: FilledButton.icon(
           icon: const Icon(Icons.document_scanner_outlined),
           label: const Text('Metni Tara'),
-          onPressed: _processing ||
+          onPressed:
+              _processing ||
                   _cameraController == null ||
                   !(_cameraController?.value.isInitialized ?? false)
               ? null
@@ -1522,173 +1647,4 @@ class _CameraScannerPageState extends State<_CameraScannerPage> {
       ),
     );
   }
-}
-
-class LighterCollectionController extends ChangeNotifier {
-  final CollectionRepository repository;
-  StreamSubscription<List<LighterSeries>>? _subscription;
-  List<LighterSeries> _series = [];
-  bool _isLoading = true;
-
-  LighterCollectionController({CollectionRepository? repo})
-      : repository = repo ?? FirebaseCollectionRepository() {
-    _subscription = repository.watchSeries().listen(
-      (series) {
-        _series = series;
-        _isLoading = false;
-        notifyListeners();
-      },
-      onError: (error) {
-        _isLoading = false;
-        notifyListeners();
-      },
-    );
-  }
-
-  bool get isLoading => _isLoading;
-
-  int get nextSeriesNumber {
-    if (_series.isEmpty) return 1;
-    return _series.map((s) => s.seriesNumber).reduce(max) + 1;
-  }
-
-  UnmodifiableListView<LighterSeries> get series {
-    final ordered = [..._series]
-      ..sort((a, b) => a.seriesNumber.compareTo(b.seriesNumber));
-    return UnmodifiableListView(ordered);
-  }
-
-  int get totalSeries => _series.length;
-  int get completedSeries => _series.where((s) => s.isComplete).length;
-  int get inProgressSeries => totalSeries - completedSeries;
-
-  List<LighterSeries> seriesByFilter(SeriesFilter filter) {
-    final items = filter == SeriesFilter.completed
-        ? _series.where((s) => s.isComplete)
-        : _series.where((s) => !s.isComplete);
-    final sorted = [...items]
-      ..sort((a, b) => a.seriesNumber.compareTo(b.seriesNumber));
-    return sorted;
-  }
-
-  LighterSeries? getById(String id) {
-    try {
-      return _series.firstWhere((serie) => serie.id == id);
-    } catch (_) {
-      return null;
-    }
-  }
-
-  LighterSeries? findBestMatch(String rawText, {double minScore = 0.15}) {
-    final normalizedQuery = _normalizeText(rawText);
-    if (normalizedQuery.isEmpty) return null;
-    LighterSeries? best;
-    double bestScore = 0;
-    for (final serie in _series) {
-      final score =
-          _matchScore(normalizedQuery, _normalizeText(serie.name));
-      if (score > bestScore) {
-        bestScore = score;
-        best = serie;
-      }
-    }
-    return bestScore >= minScore ? best : null;
-  }
-
-  List<SeriesMatch> rankedMatches(String rawText) {
-    final normalizedQuery = _normalizeText(rawText);
-    if (normalizedQuery.isEmpty) return const [];
-    final results = <SeriesMatch>[];
-    for (final serie in _series) {
-      final score =
-          _matchScore(normalizedQuery, _normalizeText(serie.name));
-      if (score > 0) {
-        results.add(SeriesMatch(series: serie, score: score));
-      }
-    }
-    results.sort((a, b) => b.score.compareTo(a.score));
-    return results;
-  }
-
-  Future<void> upsertSeries({
-    String? id,
-    required String name,
-    Set<int>? ownedPieces,
-  }) async {
-    final sanitized = _sanitizePieces(ownedPieces ?? {});
-    if (id == null) {
-      final newSeries = LighterSeries(
-        id: _IdGenerator.next(),
-        name: name.trim(),
-        seriesNumber: nextSeriesNumber,
-        ownedPieces: sanitized,
-      );
-      await repository.addSeries(newSeries);
-    } else {
-      final existing = getById(id);
-      if (existing == null) return;
-      final updated = existing.copyWith(
-        name: name.trim(),
-        ownedPieces: sanitized,
-      );
-      await repository.updateSeries(updated);
-    }
-  }
-
-  Future<void> setPiece(String id, int slot, bool owned) async {
-    await repository.setPiece(id, slot, owned);
-  }
-
-  Set<int> _sanitizePieces(Set<int> pieces) {
-    return pieces.where((slot) => slot >= 1 && slot <= 4).toSet();
-  }
-
-  Future<void> removeSeries(String id) async {
-    await repository.deleteSeries(id);
-  }
-  
-  @override
-  void dispose() {
-    _subscription?.cancel();
-    super.dispose();
-  }
-
-  static String _normalizeText(String value) => value
-      .toLowerCase()
-      .replaceAll(RegExp(r'[^a-z0-9çğıöşü\s]'), ' ')
-      .replaceAll(RegExp(r'\s+'), ' ')
-      .trim();
-
-  static double _matchScore(String haystack, String needle) {
-    if (needle.isEmpty || haystack.isEmpty) return 0;
-    if (haystack.contains(needle) || needle.contains(haystack)) {
-      return 1;
-    }
-    final queryTokens = haystack.split(' ').where((t) => t.isNotEmpty).toSet();
-    final needleTokens =
-        needle.split(' ').where((token) => token.isNotEmpty).toList();
-    if (needleTokens.isEmpty) return 0;
-    final matches = needleTokens.where(
-      (token) => queryTokens.any(
-        (candidate) =>
-            candidate.contains(token) || token.contains(candidate),
-      ),
-    );
-    return matches.length / needleTokens.length;
-  }
-}
-
-class _IdGenerator {
-  static int _seed = 0;
-
-  static String next() {
-    _seed += 1;
-    return 'series-$_seed';
-  }
-}
-
-class SeriesMatch {
-  const SeriesMatch({required this.series, required this.score});
-  final LighterSeries series;
-  final double score;
 }
