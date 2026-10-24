@@ -37,3 +37,7 @@ Gerçek değerleri komuta, kaynak koda, issue/PR açıklamasına veya loga yapı
 ## Güvenlik sınırı
 
 Bu kullanıcı talebiyle cihazda çalışan bir uygulama kilididir. Başarılı girişten önce koleksiyon repository’si oluşturulmaz; oturum işareti cihazın güvenli deposunda tutulur. Parolanın kendisi APK’ya eklenmez; doğrulama özeti eklenir. APK’yı inceleyen kişi bu kontrolü atlayabilir veya özeti çevrimdışı deneyebilir. Firebase yönetim erişimi olmadığı için sunucu kuralları değiştirilmedi; doğrudan Firebase erişimini bu kilit korumaz. Kullanıcı bu sınırı kabul ederek Secrets ile yayın düzenini seçti.
+
+## Yüklenmiş taslağı onarma
+
+APK derlemesi/yüklemesi tamamlanmış ancak yayın son adımı başarısız olmuşsa `python3 scripts/publish_release.py --finish-draft v<version>+<build>` kullanılabilir. Bu işlem GitHub’daki APK digest’ini SHA256SUMS ile doğrular; APK’yı yeniden yüklemez veya değiştirmez. Ardından taslağı yayımlar ve downloads listesini onarır.

@@ -42,14 +42,31 @@ class ReleaseTests(unittest.TestCase):
             with patch.object(publisher, 'ROOT', root), \
                  patch.object(publisher, 'all_releases', side_effect=[[], [], [draft]]), \
                  patch.object(publisher, 'gh', return_value='') as api, \
-                 patch.object(publisher, 'refresh_downloads') as refresh, \
+                 patch.object(publisher, 'finish_draft') as finish, \
                  patch.object(publisher.subprocess, 'run', return_value=ref), \
                  patch.object(publisher.subprocess, 'check_output', return_value='source-sha'), \
                  patch.dict(publisher.os.environ, {'GITHUB_REF_TYPE': 'branch'}, clear=False):
                 publisher.publish()
-            api.assert_any_call('release', 'edit', 'v1.0.1+2', '--repo', publisher.REPO, '--draft=false', '--latest')
+            finish.assert_called_once_with('v1.0.1+2')
             self.assertFalse(any('/releases/tags/' in str(call) for call in api.call_args_list))
-            refresh.assert_called_once()
+
+    def test_draft_finishing_checks_the_server_digest_before_publication(self):
+        digest = 'a' * 64
+        draft = {'tag_name': 'v1.0.1+2', 'draft': True, 'assets': [
+            {'name': 'Clipper.apk', 'size': 1000001, 'digest': 'sha256:' + digest},
+            {'name': 'SHA256SUMS', 'size': 78},
+        ]}
+        with patch.object(publisher, 'all_releases', return_value=[draft]), \
+             patch.object(publisher, 'gh', return_value=digest + '  Clipper.apk\n') as api, \
+             patch.object(publisher, 'refresh_downloads') as refresh:
+            publisher.finish_draft('v1.0.1+2')
+        api.assert_any_call('release', 'edit', 'v1.0.1+2', '--repo', publisher.REPO, '--draft=false', '--latest')
+        refresh.assert_called_once()
+        with patch.object(publisher, 'all_releases', return_value=[draft]), \
+             patch.object(publisher, 'gh', return_value='b' * 64 + '  Clipper.apk\n') as api:
+            with self.assertRaises(ValueError):
+                publisher.finish_draft('v1.0.1+2')
+        self.assertFalse(any(call.args[:2] == ('release', 'edit') for call in api.call_args_list))
 
 if __name__ == '__main__':
     unittest.main()

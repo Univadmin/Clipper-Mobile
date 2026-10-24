@@ -65,6 +65,32 @@ def refresh_downloads():
     })
 
 
+def finish_draft(tag):
+    if not re.fullmatch(r'v\d+\.\d+\.\d+\+\d+', tag):
+        raise ValueError('Invalid release tag')
+    release = next((r for r in all_releases() if r['tag_name'] == tag), None)
+    if not release:
+        raise ValueError('Release not found')
+    assets = {a['name']: a for a in release['assets']}
+    if not {'Clipper.apk', 'SHA256SUMS'} <= assets.keys():
+        raise ValueError('APK/checksum upload is incomplete')
+    manifest = gh('release', 'download', tag, '--repo', REPO,
+                  '--pattern', 'SHA256SUMS', '--output', '-')
+    match = re.fullmatch(r'([a-f0-9]{64})  Clipper.apk\n', manifest)
+    if not match or assets['Clipper.apk'].get('digest') != 'sha256:' + match.group(1):
+        raise ValueError('Server APK digest does not match release checksum')
+    if assets['Clipper.apk']['size'] < 1000000:
+        raise ValueError('APK upload is invalid')
+    if release['draft']:
+        latest_build = max((int(r['tag_name'].split('+')[-1]) for r in all_releases()
+                           if not r['draft'] and re.fullmatch(r'v\d+\.\d+\.\d+\+\d+', r['tag_name'])), default=0)
+        if int(tag.split('+')[1]) <= latest_build:
+            raise ValueError('Refusing to replace latest with an older draft')
+        gh('release', 'edit', tag, '--repo', REPO, '--draft=false', '--latest')
+    refresh_downloads()
+    print(f'Published APK and downloads verified for {tag}.')
+
+
 def publish():
     release_version = version()
     tag = 'v' + release_version
@@ -120,16 +146,16 @@ def publish():
     assets = {a['name']: a for a in release['assets']}
     if assets.get('Clipper.apk', {}).get('size') != target.stat().st_size:
         raise ValueError('Uploaded APK size mismatch')
-    gh('release', 'edit', tag, '--repo', REPO, '--draft=false', '--latest')
-    refresh_downloads()
-    print(f'Published {tag}; downloads history updated.')
+    finish_draft(tag)
 
 
 if __name__ == '__main__':
     import sys
     if sys.argv[1:] == ['--refresh-downloads']:
         refresh_downloads()
+    elif len(sys.argv) == 3 and sys.argv[1] == '--finish-draft':
+        finish_draft(sys.argv[2])
     elif not sys.argv[1:]:
         publish()
     else:
-        raise SystemExit('Usage: publish_release.py [--refresh-downloads]')
+        raise SystemExit('Usage: publish_release.py [--refresh-downloads | --finish-draft TAG]')
